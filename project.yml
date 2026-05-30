@@ -1,0 +1,29 @@
+name: NailTry
+options:
+  bundleIdPrefix: com.snarfnet
+  deploymentTarget:
+    iOS: "16.0"
+  defaultConfig: Release
+
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.snarfnet.nailtry
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.9"
+    TARGETED_DEVICE_FAMILY: "1"
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+
+targets:
+  NailTry:
+    type: application
+    platform: iOS
+    sources:
+      - path: NailTry
+    info:
+      path: NailTry/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.snarfnet.nailtry
+        INFOPLIST_FILE: NailTry/Info.plist
+        CODE_SIGN_STYLE: Manual
