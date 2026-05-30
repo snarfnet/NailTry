@@ -9,7 +9,7 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.snarfnet.nailtry
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    CURRENT_PROJECT_VERSION: "2"
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
     SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
@@ -26,5 +26,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.snarfnet.nailtry
         INFOPLIST_FILE: NailTry/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
         CODE_SIGN_STYLE: Manual
+        DEVELOPMENT_TEAM: 83VGKGSQUH
+        TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": "arm64 x86_64"
+    dependencies: []
