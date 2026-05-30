@@ -9,7 +9,7 @@ settings:
   base:
     PRODUCT_BUNDLE_IDENTIFIER: com.snarfnet.nailtry
     MARKETING_VERSION: "1.0"
-    CURRENT_PROJECT_VERSION: "2"
+    CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.9"
     TARGETED_DEVICE_FAMILY: "1"
     SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
@@ -22,6 +22,18 @@ targets:
       - path: NailTry
     info:
       path: NailTry/Info.plist
+      properties:
+        CFBundleDisplayName: "ネイル見本"
+        CFBundleName: "NailTry"
+        NSCameraUsageDescription: "爪にネイルデザインを重ねてリアルタイムで試着するためにカメラを使用します。"
+        NSPhotoLibraryUsageDescription: "ネイルデザインに使う画像を選ぶためにフォトライブラリにアクセスします。"
+        NSPhotoLibraryAddUsageDescription: "試着した結果をカメラロールに保存します。"
+        LSRequiresIPhoneOS: true
+        ITSAppUsesNonExemptEncryption: false
+        UIRequiredDeviceCapabilities:
+          - arm64
+          - video-camera
+          - metal
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.snarfnet.nailtry
