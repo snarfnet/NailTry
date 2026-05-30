@@ -1,7 +1,7 @@
 {
   "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"ls \\\"C:/Users/Windows/NailTry/NailTry/\\\" && echo \\\"---\\\" && ls \\\"C:/Users/Windows/NailTry/NailTry/Assets.xcassets/\\\" 2>/dev/null && echo \\\"---\\\" && ls \\\"C:/Users/Windows/NailTry/NailTry/Sa...",
-  "error": "Exit code 2\nCamera\nCompositor\nInfo.plist\nModels\nNailTryApp.swift\nNailTryStyle.swift\nSampleDesigns\nViews\n---",
-  "timestamp": "2026-05-30T02:22:20.353Z",
-  "retry_count": 1
+  "tool_input_preview": "{\"command\":\"gh workflow run \\\"Copy secrets to target repo\\\" -R snarfnet/FutsunoNews \\\\\\n  -f source_repo=\\\"snarfnet/NailVital\\\" \\\\\\n  -f target_repo=\\\"snarfnet/NailTry\\\" \\\\\\n  -f secret_names=\\\"DIST_C...",
+  "error": "Exit code 1\ncould not create workflow dispatch event: HTTP 422: Unexpected inputs provided: [\"secret_names\", \"source_repo\"] (https://api.github.com/repos/snarfnet/FutsunoNews/actions/workflows/268660134/dispatches)",
+  "timestamp": "2026-05-30T02:27:13.116Z",
+  "retry_count": 3
 }

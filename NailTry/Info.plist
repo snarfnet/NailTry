@@ -9,7 +9,7 @@
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>試着した結果をカメラロールに保存します。</string>
     <key>CFBundleDisplayName</key>
-    <string>Nail Try</string>
+    <string>ネイル見本</string>
     <key>CFBundleName</key>
     <string>NailTry</string>
     <key>CFBundleIdentifier</key>

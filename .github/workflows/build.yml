@@ -2,7 +2,7 @@ name: Build & Upload
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 jobs:
@@ -12,12 +12,18 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app
+        run: |
+          echo "=== Available Xcode versions ==="
+          ls -d /Applications/Xcode*.app 2>/dev/null | sort -V
+          XCODE=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          echo "Selected: $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
 
-      - name: Install Certificate
+      - name: Install Apple Certificate
         env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.DIST_CERT_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           CERT_PATH=$RUNNER_TEMP/cert.p12
@@ -29,59 +35,226 @@ jobs:
           security import $CERT_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
 
-      - name: Install Provisioning Profile
-        env:
-          PROVISIONING_PROFILE_BASE64: ${{ secrets.PROVISIONING_PROFILE_BASE64 }}
-        run: |
-          PP_PATH=$RUNNER_TEMP/profile.mobileprovision
-          echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode -o $PP_PATH
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
-
-      - name: Build Archive
-        run: |
-          xcodebuild archive \
-            -project NailTry/NailTry.xcodeproj \
-            -scheme NailTry \
-            -configuration Release \
-            -archivePath $RUNNER_TEMP/NailTry.xcarchive \
-            -allowProvisioningUpdates \
-            CODE_SIGN_STYLE=Manual \
-            PROVISIONING_PROFILE_SPECIFIER="${{ secrets.PROVISIONING_PROFILE_NAME }}"
-
-      - name: Export IPA
-        run: |
-          cat > $RUNNER_TEMP/ExportOptions.plist << EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key><string>app-store-connect</string>
-            <key>signingStyle</key><string>manual</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>${{ secrets.BUNDLE_ID }}</key>
-              <string>${{ secrets.PROVISIONING_PROFILE_NAME }}</string>
-            </dict>
-          </dict>
-          </plist>
-          EOF
-          xcodebuild -exportArchive \
-            -archivePath $RUNNER_TEMP/NailTry.xcarchive \
-            -exportPath $RUNNER_TEMP/export \
-            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist
-
-      - name: Upload to App Store Connect
+      - name: Setup ASC API Key
         env:
           ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
-          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
           ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
           echo -n "$ASC_API_KEY_BASE64" | base64 --decode \
             -o ~/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8
-          xcrun altool --upload-app \
-            -f $RUNNER_TEMP/export/NailTry.ipa \
-            --type ios \
-            --apiKey $ASC_API_KEY_ID \
-            --apiIssuer $ASC_API_ISSUER_ID
+
+      - name: Create & Install Provisioning Profile
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+        run: |
+          pip3 install PyJWT requests --quiet --break-system-packages
+          python3 << 'PYEOF'
+          import json, time, jwt, requests, base64, subprocess, os
+
+          KEY_ID    = os.environ["ASC_API_KEY_ID"]
+          ISSUER_ID = os.environ["ASC_API_ISSUER_ID"]
+          KEY_B64   = os.environ["ASC_API_KEY_BASE64"]
+          BUNDLE_ID = "com.snarfnet.nailtry"
+          TEAM_ID   = "83VGKGSQUH"
+          PP_DIR    = os.path.expanduser("~/Library/MobileDevice/Provisioning Profiles")
+          os.makedirs(PP_DIR, exist_ok=True)
+
+          private_key = base64.b64decode(KEY_B64).decode()
+          now = int(time.time())
+          token = jwt.encode(
+              {"iss": ISSUER_ID, "iat": now, "exp": now + 1200, "aud": "appstoreconnect-v1"},
+              private_key, algorithm="ES256", headers={"kid": KEY_ID}
+          )
+          h = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+          # 1. Find bundleId resource id
+          r = requests.get(
+              "https://api.appstoreconnect.apple.com/v1/bundleIds",
+              headers=h, params={"filter[identifier]": BUNDLE_ID}
+          )
+          data = r.json().get("data", [])
+          if not data:
+              print("Bundle ID not found in portal, registering...")
+              r2 = requests.post("https://api.appstoreconnect.apple.com/v1/bundleIds",
+                  headers=h,
+                  data=json.dumps({"data": {"type": "bundleIds", "attributes": {
+                      "identifier": BUNDLE_ID, "name": "NailTry", "platform": "IOS"
+                  }}}))
+              bid = r2.json()["data"]["id"]
+          else:
+              bid = data[0]["id"]
+          print("Bundle ID resource:", bid)
+
+          # 2. Find distribution certificate id
+          r = requests.get(
+              "https://api.appstoreconnect.apple.com/v1/certificates",
+              headers=h, params={"filter[certificateType]": "DISTRIBUTION"}
+          )
+          certs = r.json().get("data", [])
+          if not certs:
+              print("No DISTRIBUTION cert found, trying IOS_DISTRIBUTION...")
+              r = requests.get("https://api.appstoreconnect.apple.com/v1/certificates",
+                  headers=h, params={"filter[certificateType]": "IOS_DISTRIBUTION"})
+              certs = r.json().get("data", [])
+          cert_id = certs[0]["id"]
+          print("Cert ID:", cert_id)
+
+          # 3. Create App Store provisioning profile
+          payload = {
+              "data": {
+                  "type": "profiles",
+                  "attributes": {
+                      "name": f"NailTry AppStore {int(time.time())}",
+                      "profileType": "IOS_APP_STORE"
+                  },
+                  "relationships": {
+                      "bundleId": {"data": {"type": "bundleIds", "id": bid}},
+                      "certificates": {"data": [{"type": "certificates", "id": cert_id}]},
+                      "devices": {"data": []}
+                  }
+              }
+          }
+          r = requests.post("https://api.appstoreconnect.apple.com/v1/profiles",
+              headers=h, data=json.dumps(payload))
+          pdata = r.json()
+          if "errors" in pdata:
+              print("Create profile error:", pdata["errors"])
+              # Try to find existing
+              r2 = requests.get("https://api.appstoreconnect.apple.com/v1/profiles",
+                  headers=h, params={"filter[profileType]": "IOS_APP_STORE",
+                                     "filter[bundleId.identifier]": BUNDLE_ID})
+              profiles = r2.json().get("data", [])
+              profile_content = profiles[0]["attributes"]["profileContent"]
+              profile_name = profiles[0]["attributes"]["name"]
+          else:
+              profile_content = pdata["data"]["attributes"]["profileContent"]
+              profile_name = pdata["data"]["attributes"]["name"]
+
+          print("Profile name:", profile_name)
+          profile_bytes = base64.b64decode(profile_content)
+          pp_path = os.path.join(PP_DIR, "NailVital.mobileprovision")
+          with open(pp_path, "wb") as f:
+              f.write(profile_bytes)
+
+          # Extract UUID
+          result = subprocess.run(
+              ["security", "cms", "-D", "-i", pp_path],
+              capture_output=True, text=True
+          )
+          import plistlib
+          plist = plistlib.loads(result.stdout.encode())
+          uuid = plist.get("UUID", "")
+          print("Profile UUID:", uuid)
+
+          if uuid:
+              uuid_path = os.path.join(PP_DIR, f"{uuid}.mobileprovision")
+              os.rename(pp_path, uuid_path)
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write(f"PROV_PROFILE_UUID={uuid}\n")
+                  f.write(f"PROV_PROFILE_NAME={profile_name}\n")
+          PYEOF
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate --spec project.yml
+
+      - name: Patch Info.plist
+        run: |
+          PLIST="NailTry/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :UISupportedInterfaceOrientations~ipad" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:1 string UIInterfaceOrientationPortraitUpsideDown" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:2 string UIInterfaceOrientationLandscapeLeft" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UISupportedInterfaceOrientations:3 string UIInterfaceOrientationLandscapeRight" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Delete :UILaunchScreen" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UILaunchScreen dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Delete :ITSAppUsesNonExemptEncryption" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$PLIST"
+          echo "=== Info.plist after patch ==="
+          cat "$PLIST"
+
+      - name: Generate iPad Icon Sizes
+        run: |
+          ICON_DIR="NailTry/Assets.xcassets/AppIcon.appiconset"
+          SRC="$ICON_DIR/Icon-1024.png"
+          sips -z 152 152 "$SRC" --out "$ICON_DIR/Icon-76@2x.png"
+          sips -z 167 167 "$SRC" --out "$ICON_DIR/Icon-83.5@2x.png"
+          echo "Generated iPad icons"
+
+      - name: Register iOS Simulator Runtime
+        run: |
+          XCODE=$(xcode-select -p | sed 's|/Contents/Developer||')
+          RUNTIME="$XCODE/Contents/Developer/Platforms/iPhoneOS.platform/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS.simruntime"
+          if [ -d "$RUNTIME" ]; then
+            echo "Registering bundled iOS simulator runtime from $XCODE"
+            xcrun simctl runtime add "$RUNTIME" 2>&1 || true
+          else
+            echo "Bundled runtime not found, downloading platform..."
+            sudo xcodebuild -downloadPlatform iOS 2>&1 | tail -5 || true
+          fi
+          xcrun simctl list runtimes 2>&1 | head -20
+
+      - name: Build Archive
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          xcodebuild archive \
+            -project NailTry.xcodeproj \
+            -scheme NailTry \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath $RUNNER_TEMP/NailTry.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_API_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_API_ISSUER_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM=83VGKGSQUH \
+            PROVISIONING_PROFILE="$PROV_PROFILE_UUID" \
+            SUPPORTED_PLATFORMS=iphoneos \
+            SDKROOT=iphoneos
+
+      - name: Export and Upload IPA
+        env:
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          cat > $RUNNER_TEMP/ExportOptions.plist << PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>upload</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>83VGKGSQUH</string>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.snarfnet.nailtry</key>
+              <string>${{ env.PROV_PROFILE_NAME }}</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/NailTry.xcarchive \
+            -exportPath $RUNNER_TEMP/export \
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${ASC_API_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_API_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_API_ISSUER_ID"
